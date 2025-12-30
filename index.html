@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MyBusTimes Duty Generator</title>
+<title>MyBusTimes Multi-Route Duty Generator</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -22,13 +22,13 @@ header {
 
 .panel, .duty {
     background: #fff;
-    max-width: 420px;
+    max-width: 480px;
     margin: 15px auto;
     padding: 12px;
     border-radius: 6px;
 }
 
-input {
+input, select {
     width: 100%;
     padding: 8px;
     margin-bottom: 6px;
@@ -104,7 +104,7 @@ button {
 
 <body>
 
-<header>MyBusTimes Duty Generator</header>
+<header>MyBusTimes Multi-Route Duty Generator</header>
 
 <div class="panel">
     <input id="route" placeholder="Route (e.g. X1)">
@@ -115,20 +115,27 @@ button {
     <input id="time" placeholder="Time (HH:MM)">
     <input id="from" placeholder="From">
     <input id="to" placeholder="To">
+    <select id="type">
+        <option value="trip">Trip</option>
+        <option value="break">Break</option>
+    </select>
 
-    <button class="add" onclick="addTrip()">Add trip</button>
+    <button class="add" onclick="addItem()">Add to duty</button>
 
     <div id="editor"></div>
 
     <button onclick="generateDuty()">Generate duty</button>
     <button onclick="saveDuty()">Save duty</button>
     <button onclick="loadDuty()">Load duty</button>
+
+    <button onclick="addRoute()">Add new route</button>
 </div>
 
 <div id="output"></div>
 
 <script>
-let trips = [];
+let dutyRoutes = [];
+let currentRoute = {route:'', depot:'', items:[]};
 let dragIndex = null;
 
 // Convert HH:MM to minutes
@@ -137,16 +144,29 @@ function toMin(t){
     return h*60+m;
 }
 
-function addTrip(){
+// Add trip or break
+function addItem(){
+    const routeEl = document.getElementById("route");
+    const depotEl = document.getElementById("depot");
     const time = document.getElementById("time").value.trim();
     const from = document.getElementById("from").value.trim();
     const to = document.getElementById("to").value.trim();
-    if(!time || !from || !to) return alert("Fill all trip fields");
+    const type = document.getElementById("type").value;
 
-    trips.push({time, from, to});
+    if(!routeEl.value || !depotEl.value) return alert("Enter route & depot");
+    if(type === 'trip' && (!time || !from || !to)) return alert("Fill all trip fields");
+
+    currentRoute.route = routeEl.value;
+    currentRoute.depot = depotEl.value;
+
+    let item = type === 'trip' ? {time, from, to, type} : {time, type};
+    currentRoute.items.push(item);
+
+    // Clear input fields
     document.getElementById("time").value = "";
     document.getElementById("from").value = "";
     document.getElementById("to").value = "";
+
     renderEditor();
 }
 
@@ -154,93 +174,108 @@ function addTrip(){
 function renderEditor(){
     const editor = document.getElementById("editor");
     editor.innerHTML = "";
-    trips.forEach((t,i)=>{
+    currentRoute.items.forEach((t,i)=>{
         const d = document.createElement("div");
         d.className="trip-row";
         d.draggable=true;
         d.ondragstart=()=>dragIndex=i;
         d.ondragover=e=>e.preventDefault();
         d.ondrop=()=>swap(i);
-        d.innerHTML=`
-            <span>${t.time}</span>
-            <input value="${t.from}" onchange="trips[${i}].from=this.value">
-            <input value="${t.to}" onchange="trips[${i}].to=this.value">
-            <button onclick="del(${i})">✖</button>
-        `;
+
+        if(t.type==='trip'){
+            d.innerHTML=`
+                <span>${t.time}</span>
+                <input value="${t.from}" onchange="currentRoute.items[${i}].from=this.value">
+                <input value="${t.to}" onchange="currentRoute.items[${i}].to=this.value">
+                <span>Trip</span>
+                <button onclick="del(${i})">✖</button>
+            `;
+        } else {
+            d.innerHTML=`
+                <span>${t.time}</span>
+                <div colspan="2">Break</div>
+                <span>Break</span>
+                <button onclick="del(${i})">✖</button>
+            `;
+        }
         editor.appendChild(d);
     });
 }
 
+// Swap items for drag
 function swap(i){
-    [trips[dragIndex], trips[i]] = [trips[i], trips[dragIndex]];
+    [currentRoute.items[dragIndex], currentRoute.items[i]] = [currentRoute.items[i], currentRoute.items[dragIndex]];
     renderEditor();
 }
 
+// Delete item
 function del(i){
-    trips.splice(i,1);
+    currentRoute.items.splice(i,1);
     renderEditor();
 }
 
-// Generate MyBusTimes-style duty card
+// Add route to dutyRoutes array
+function addRoute(){
+    if(!currentRoute.route || !currentRoute.depot || !currentRoute.items.length) return alert("Complete current route first");
+    dutyRoutes.push(JSON.parse(JSON.stringify(currentRoute)));
+    currentRoute = {route:'', depot:'', items:[]};
+    document.getElementById("route").value='';
+    document.getElementById("depot").value='';
+    document.getElementById("editor").innerHTML='';
+    alert("Route added. You can start new route.");
+}
+
+// Generate duty card
 function generateDuty(){
-    const routeEl = document.getElementById("route");
-    const depotEl = document.getElementById("depot");
-    if(!routeEl.value || !depotEl.value || !trips.length)
-        return alert("Complete the duty first");
+    let html='';
+    dutyRoutesCopy = JSON.parse(JSON.stringify(dutyRoutes));
 
-    trips.sort((a,b)=>toMin(a.time)-toMin(b.time));
+    if(currentRoute.items.length>0){
+        dutyRoutesCopy.push(JSON.parse(JSON.stringify(currentRoute)));
+    }
 
-    let total=0;
-    for(let i=1;i<trips.length;i++)
-        total += toMin(trips[i].time) - toMin(trips[i-1].time);
+    if(dutyRoutesCopy.length===0) return alert("Add at least one route");
 
-    let breakWarn = total > 270;
-    let finish = trips[trips.length-1].to;
-    let badFinish = finish !== depotEl.value;
+    dutyRoutesCopy.forEach(r=>{
+        let items = r.items.slice().sort((a,b)=>a.time && b.time ? toMin(a.time)-toMin(b.time) : 0);
+        let total=0;
+        for(let i=1;i<items.length;i++){
+            if(items[i].type==='trip' && items[i-1].type==='trip')
+                total+=toMin(items[i].time)-toMin(items[i-1].time);
+        }
+        let breakWarn = total>270;
+        let finish = '';
+        for(let i=items.length-1;i>=0;i--){
+            if(items[i].type==='trip'){ finish=items[i].to; break; }
+        }
+        let badFinish = finish !== r.depot;
 
-    let html = `<div class="duty">
-        <div class="duty-header">
-            <div class="route">${routeEl.value}</div>
-            <div class="depot">${depotEl.value} Depot</div>
-        </div>`;
+        html += `<div class="duty">
+            <div class="duty-header">
+                <div class="route">${r.route}</div>
+                <div class="depot">${r.depot} Depot</div>
+            </div>`;
 
-    trips.forEach(t=>{
-        html += `
-        <div class="trip">
-            <div><strong>${t.time}</strong></div>
-            <div>${t.from} → ${t.to}</div>
-        </div>`;
-    });
+        items.forEach(t=>{
+            if(t.type==='trip'){
+                html+=`
+                <div class="trip">
+                    <div><strong>${t.time}</strong></div>
+                    <div>${t.from} → ${t.to}</div>
+                </div>`;
+            } else {
+                html+=`
+                <div class="trip">
+                    <div><strong>${t.time}</strong></div>
+                    <div><em>Break</em></div>
+                </div>`;
+            }
+        });
 
-    html += `
-        <div class="footer">
-            Total duty: ${total} mins<br>
-            ${breakWarn?'<span class="warn">Break required</span><br>':``}
-            Finish: ${finish}${badFinish?' ⚠':''}
-        </div>
-    </div>`;
-
-    document.getElementById("output").innerHTML = html;
-}
-
-// Save/load using localStorage
-function saveDuty(){
-    const routeEl = document.getElementById("route");
-    const depotEl = document.getElementById("depot");
-    localStorage.setItem("duty",
-        JSON.stringify({route:routeEl.value,depot:depotEl.value,trips}));
-    alert("Duty saved");
-}
-
-function loadDuty(){
-    const d = JSON.parse(localStorage.getItem("duty"));
-    if(!d) return;
-    document.getElementById("route").value=d.route;
-    document.getElementById("depot").value=d.depot;
-    trips=d.trips;
-    renderEditor();
-}
-</script>
-
-</body>
-</html>
+        html+=`
+            <div class="footer">
+                Total duty: ${total} mins<br>
+                ${breakWarn?'<span class="warn">Break required</span><br>':``}
+                Finish: ${finish}${badFinish?' ⚠':''}
+            </div>
+        </
